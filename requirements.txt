@@ -1,0 +1,10 @@
+streamlit 
+pandas 
+numpy 
+faiss-cpu 
+google-generativeai 
+langchain 
+bs4 
+requests 
+python-dotenv
+
