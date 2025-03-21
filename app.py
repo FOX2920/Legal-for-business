@@ -179,7 +179,7 @@ Cuối cùng, thêm phần "Nguồn tham khảo" liệt kê các văn bản phá
 
     try:
         # Tạo trả lời từ Gemini
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
