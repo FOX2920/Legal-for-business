@@ -7,57 +7,57 @@ import os
 
 def extract_pdf_text(pdfs):
     """
-    Extract text from PDF documents
+    Trích xuất văn bản từ tài liệu PDF
 
-    Parameters:
-    - pdfs (list): List of PDF documents
+    Tham số:
+    - pdfs (list): Danh sách tài liệu PDF
 
-    Returns:
-    - docs: List of text extracted from PDF documents
+    Trả về:
+    - docs: Danh sách văn bản được trích xuất từ tài liệu PDF
     """
     docs = []
     for pdf in pdfs:
         pdf_path = os.path.join("docs", pdf)
-        # Load text from the PDF and extend the list of documents
+        # Tải văn bản từ PDF và mở rộng danh sách tài liệu
         docs.extend(PyPDFLoader(pdf_path).load())
     return docs
 
 def get_text_chunks(docs):
     """
-    Split text into chunks
+    Chia văn bản thành các đoạn nhỏ
 
-    Parameters:
-    - docs (list): List of text documents
+    Tham số:
+    - docs (list): Danh sách tài liệu văn bản
 
-    Returns:
-    - chunks: List of text chunks
+    Trả về:
+    - chunks: Danh sách các đoạn văn bản nhỏ
     """
-    # Chunk size is configured to be an approximation to the model limit of 2048 tokens
+    # Kích thước đoạn được cấu hình để xấp xỉ với giới hạn mô hình 2048 token
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=8000, chunk_overlap=800, separators=["\n\n", "\n", " ", ""])
     chunks = text_splitter.split_documents(docs)
     return chunks
 
 def get_vectorstore(pdfs, from_session_state=False):
     """
-    Create or retrieve a vectorstore from PDF documents
+    Tạo hoặc lấy một kho vector từ tài liệu PDF
 
-    Parameters:
-    - pdfs (list): List of PDF documents
-    - from_session_state (bool, optional): Flag indicating whether to load from session state. Defaults to False
+    Tham số:
+    - pdfs (list): Danh sách tài liệu PDF
+    - from_session_state (bool, optional): Cờ chỉ ra việc tải từ trạng thái phiên hay không. Mặc định là False
 
-    Returns:
-    - vectordb or None: The created or retrieved vectorstore. Returns None if loading from session state and the database does not exist
+    Trả về:
+    - vectordb hoặc None: Kho vector được tạo hoặc lấy ra. Trả về None nếu tải từ trạng thái phiên và cơ sở dữ liệu không tồn tại
     """
     load_dotenv()
     embedding = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     if from_session_state and os.path.exists("Vector_DB - Documents"):
-        # Retrieve vectorstore from existing one
+        # Lấy kho vector từ cơ sở dữ liệu hiện có
         vectordb = Chroma(persist_directory="Vector_DB - Documents", embedding_function=embedding)
         return vectordb
     elif not from_session_state:
         docs = extract_pdf_text(pdfs)
         chunks = get_text_chunks(docs)
-        # Create vectorstore from chunks and saves it to the folder Vector_DB - Documents
+        # Tạo kho vector từ các đoạn và lưu nó vào thư mục Vector_DB - Documents
         vectordb = Chroma.from_documents(documents=chunks, embedding=embedding, persist_directory="Vector_DB - Documents")
         return vectordb
     return None
