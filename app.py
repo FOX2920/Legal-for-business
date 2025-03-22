@@ -7,62 +7,74 @@ from utils.chatbot import chat
 
 class ChatApp:
     """
-    A Streamlit application for chatting with PDF documents
+    Một ứng dụng Streamlit để trò chuyện với tài liệu PDF
 
-    This class encapsulates the functionality for uploading PDF documents, processing them,
-    and enabling users to chat with the documents using a chatbot. It handles the initialization
-    of Streamlit configurations and session state variables, as well as the frontend for document
-    upload and chat interaction
+    Lớp này đóng gói chức năng để tải lên tài liệu PDF, xử lý chúng,
+    và cho phép người dùng trò chuyện với tài liệu bằng chatbot. Nó xử lý việc khởi tạo
+    cấu hình Streamlit và các biến trạng thái phiên, cũng như giao diện người dùng cho việc tải lên tài liệu
+    và tương tác trò chuyện
     """
     def __init__(self):
         """
-        Initializes the ChatApp class
+        Khởi tạo lớp ChatApp
 
-        This method ensures the existence of the 'docs' folder, sets Streamlit page configurations,
-        and initializes session state variables
+        Phương thức này đảm bảo sự tồn tại của thư mục 'docs', thiết lập cấu hình trang Streamlit,
+        và khởi tạo các biến trạng thái phiên
         """
-        # Ensure the docs folder exists
+        # Đảm bảo thư mục docs tồn tại
         if not os.path.exists("docs"):
             os.makedirs("docs")
 
-        # Configurations and session state initialization
-        st.set_page_config(page_title="Chat with PDFS :books:")
-        st.title("Chat with PDFS :books:")
+        # Cấu hình và khởi tạo trạng thái phiên
+        st.set_page_config(page_title="Trò chuyện với PDF 📚", page_icon="📚")
+        st.title("Trò chuyện với tài liệu PDF 📚")
         initialize_session_state_variables(st)
         self.docs_files = st.session_state.processed_documents
 
     def run(self):
         """
-        Runs the Streamlit app for chatting with PDFs
+        Chạy ứng dụng Streamlit để trò chuyện với PDF
 
-        This method handles the frontend for document upload, unlocks the chat when documents are uploaded,
-        and locks the chat until documents are uploaded
+        Phương thức này xử lý giao diện người dùng để tải lên tài liệu, mở khóa trò chuyện khi tài liệu được tải lên,
+        và khóa trò chuyện cho đến khi tài liệu được tải lên
         """
         upload_docs = os.listdir("docs")
-        # Sidebar frontend for document upload
+        # Giao diện thanh bên cho việc tải lên tài liệu
         with st.sidebar:
-            st.subheader("Your documents")
+            st.subheader("Tài liệu của bạn")
             if upload_docs:
-                st.write("Uploaded Documents:")
-                st.text(", ".join(upload_docs))
+                st.write("Tài liệu đã tải lên:")
+                for doc in upload_docs:
+                    st.text(f"📄 {doc}")
             else:
-                st.info("No documents uploaded yet.")
-            st.subheader("Upload PDF documents")
-            pdf_docs = st.file_uploader("Select a PDF document and click on 'Process'", type=['pdf'], accept_multiple_files=True)
+                st.info("Chưa có tài liệu nào được tải lên.")
+            
+            st.subheader("Tải lên tài liệu PDF")
+            pdf_docs = st.file_uploader("Chọn tài liệu PDF và nhấn vào 'Xử lý tài liệu'", type=['pdf'], accept_multiple_files=True)
             if pdf_docs:
                 save_docs_to_vectordb(pdf_docs, upload_docs)
 
-        # Unlocks the chat when document is uploaded
+        # Mở khóa trò chuyện khi tài liệu được tải lên
         if self.docs_files or st.session_state.uploaded_pdfs:
-            # Check to see if a new document was uploaded to update the vectordb variable in the session state
+            # Kiểm tra xem có tài liệu mới được tải lên để cập nhật biến vectordb trong trạng thái phiên không
             if len(upload_docs) > st.session_state.previous_upload_docs_length:
-                st.session_state.vectordb = get_vectorstore(upload_docs, from_session_state=True)
-                st.session_state.previous_upload_docs_length = len(upload_docs)
+                with st.spinner("Đang cập nhật cơ sở dữ liệu..."):
+                    st.session_state.vectordb = get_vectorstore(upload_docs, from_session_state=True)
+                    st.session_state.previous_upload_docs_length = len(upload_docs)
+                    st.success("Cơ sở dữ liệu đã được cập nhật!")
+            
             st.session_state.chat_history = chat(st.session_state.chat_history, st.session_state.vectordb)
 
-        # Locks the chat until a document is uploaded
+        # Khóa trò chuyện cho đến khi tài liệu được tải lên
         if not self.docs_files and not st.session_state.uploaded_pdfs:
-            st.info("Upload a pdf file to chat with it. You can keep uploading files to chat with, and if you need to leave, you won't need to upload these files again")
+            st.info("Hãy tải lên tệp PDF để bắt đầu trò chuyện. Bạn có thể tiếp tục tải lên nhiều tệp để trò chuyện, và nếu bạn cần thoát, bạn sẽ không cần tải lại các tệp này khi quay lại.")
+            st.markdown("""
+            ### Hướng dẫn sử dụng:
+            1. Tải lên một hoặc nhiều tệp PDF từ thanh bên trái
+            2. Nhấn nút "Xử lý tài liệu" để phân tích tài liệu
+            3. Đặt câu hỏi về nội dung của tài liệu trong khung chat
+            4. Xem nguồn thông tin được sử dụng trong thanh bên trái
+            """)
 
 if __name__ == "__main__":
     app = ChatApp()
