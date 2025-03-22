@@ -1,315 +1,125 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
-import faiss
-import time
-import os
-import re
-import random
-import google.generativeai as genai
-from bs4 import BeautifulSoup
-import requests
+from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+import os
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+import google.generativeai as genai
+from langchain.vectorstores import FAISS
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.chains.question_answering import load_qa_chain
+from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
+from transformers import RagTokenizer, RagRetriever, RagTokenForGeneration, RagSequenceForGeneration
+import torch
+from transformers import pipeline
+from datasets import load_dataset
 
-# Tải các biến môi trường từ file .env
 load_dotenv()
+os.getenv("GOOGLE_API_KEY")
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# Cấu hình API Gemini
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-genai.configure(api_key=GOOGLE_API_KEY)
+def get_pdf_text(pdf_docs):
+    text=""
+    for pdf in pdf_docs:
+        pdf_reader= PdfReader(pdf)
+        for page in pdf_reader.pages:
+            text+= page.extract_text()
+    return  text
 
-# Thiết lập tiêu đề ứng dụng
-st.set_page_config(
-    page_title="Chatbot Tư Vấn Pháp Lý",
-    page_icon="⚖️",
-    layout="wide"
-)
-
-# Hàm để tạo embeddings từ Google's Gemini
-def get_embeddings(texts, model="models/embedding-001"):
-    if not texts:
-        return []
-    
-    embeddings = []
-    # Xử lý từng văn bản để tạo embedding
-    for text in texts:
-        if not text or text.isspace():
-            # Thêm vector zero nếu text rỗng
-            embeddings.append(np.zeros(768))
-            continue
-        
-        try:
-            # Tạo embedding thông qua Gemini API
-            embedding = genai.embed_content(
-                model=model,
-                content=text,
-                task_type="retrieval_document"
-            )
-            # Lấy giá trị embedding
-            embedding_values = embedding["embedding"]
-            embeddings.append(embedding_values)
-        except Exception as e:
-            st.error(f"Lỗi khi tạo embedding: {str(e)}")
-            # Thêm vector zero trong trường hợp lỗi
-            embeddings.append(np.zeros(768))
-    
-    return embeddings
-
-# Hàm để chia nhỏ văn bản thành các đoạn
-def chunk_text(text, chunk_size=1000, chunk_overlap=200):
-    if not text or text.isspace():
-        return []
-    
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ". ", ", ", " ", ""]
-    )
-    
+def get_text_chunks(text):
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
     chunks = text_splitter.split_text(text)
     return chunks
 
-# Hàm để tạo hoặc tải FAISS index
-def create_or_load_faiss_index(df, force_recreate=False):
-    index_file = "legal_docs_faiss.index"
-    mapping_file = "chunk_mapping.csv"
-    
-    if os.path.exists(index_file) and os.path.exists(mapping_file) and not force_recreate:
-        # Tải index đã có sẵn
-        st.info("Đang tải FAISS index có sẵn...")
-        index = faiss.read_index(index_file)
-        chunk_mapping = pd.read_csv(mapping_file)
-        return index, chunk_mapping
-    
-    st.info("Đang tạo FAISS index mới...")
-    # Tạo các chunks từ nội dung văn bản
-    all_chunks = []
-    doc_ids = []
-    chunk_texts = []
-    
-    with st.spinner("Đang xử lý văn bản thành các đoạn nhỏ..."):
-        for i, row in df.iterrows():
-            content = row.get('content', '')
-            if not content or content.isspace():
-                continue
-                
-            doc_id = i
-            chunks = chunk_text(content)
-            
-            for j, chunk in enumerate(chunks):
-                all_chunks.append(chunk)
-                doc_ids.append(doc_id)
-                chunk_texts.append(chunk)
-    
-    # Tạo embeddings cho tất cả các chunks
-    with st.spinner("Đang tạo embeddings cho các đoạn văn bản..."):
-        embeddings = get_embeddings(all_chunks)
-    
-    # Tạo FAISS index
-    with st.spinner("Đang xây dựng FAISS index..."):
-        dimension = len(embeddings[0])  # Kích thước vector embedding
-        index = faiss.IndexFlatL2(dimension)
-        embeddings_np = np.array(embeddings).astype('float32')
-        index.add(embeddings_np)
-    
-    # Lưu index và mapping
-    faiss.write_index(index, index_file)
-    
-    # Tạo và lưu mapping giữa chunk index và document
-    chunk_mapping = pd.DataFrame({
-        'doc_id': doc_ids,
-        'chunk_text': chunk_texts
-    })
-    chunk_mapping.to_csv(mapping_file, index=False)
-    
-    return index, chunk_mapping
 
-# Hàm tìm kiếm các đoạn văn bản liên quan
-def search_similar_chunks(query, index, chunk_mapping, df, top_k=5):
-    # Tạo embedding cho câu hỏi
-    query_embedding = get_embeddings([query])[0]
-    query_embedding_np = np.array([query_embedding]).astype('float32')
-    
-    # Tìm kiếm các chunks gần nhất
-    distances, indices = index.search(query_embedding_np, top_k)
-    
-    results = []
-    for i, idx in enumerate(indices[0]):
-        if idx < len(chunk_mapping):
-            doc_id = chunk_mapping.iloc[idx]['doc_id']
-            chunk_text = chunk_mapping.iloc[idx]['chunk_text']
-            
-            # Lấy thông tin văn bản từ doc_id
-            if doc_id < len(df):
-                doc_title = df.iloc[doc_id]['title']
-                doc_link = df.iloc[doc_id]['link']
-                doc_date = df.iloc[doc_id]['create date']
-                
-                results.append({
-                    'text': chunk_text,
-                    'title': doc_title,
-                    'link': doc_link,
-                    'date': doc_date,
-                    'score': float(distances[0][i])
-                })
-    
-    return results
+def get_vector_store(text_chunks):
+    embeddings = GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
+    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+    vector_store.save_local("faiss_index")
 
-# Hàm để tạo câu trả lời từ Gemini dựa trên các chunks tìm được
-def generate_response(query, relevant_chunks, df):
-    if not relevant_chunks:
-        return "Xin lỗi, tôi không tìm thấy thông tin liên quan đến câu hỏi của bạn trong cơ sở dữ liệu pháp lý của chúng tôi."
-    
-    # Tạo prompt cho Gemini
-    context = "\n\n".join([f"Tài liệu: {chunk['title']}\nNgày ban hành: {chunk['date']}\nNội dung: {chunk['text']}" 
-                           for chunk in relevant_chunks])
-    
-    prompt = f"""Bạn là trợ lý tư vấn pháp lý cho doanh nghiệp Việt Nam. Sử dụng thông tin dưới đây để trả lời câu hỏi của người dùng.
-    
-Câu hỏi: {query}
 
-Thông tin tham khảo:
-{context}
+def get_conversational_chain():
 
-Hãy trả lời dựa trên thông tin pháp lý đã cung cấp. Nếu không có đủ thông tin, hãy nói rõ là bạn không có thông tin đầy đủ.
-Trả lời ngắn gọn, rõ ràng và dẫn chiếu đến các điều khoản cụ thể nếu có. Đánh số các điểm chính và đề xuất hành động cụ thể nếu có thể.
-Cuối cùng, thêm phần "Nguồn tham khảo" liệt kê các văn bản pháp lý đã sử dụng để trả lời.
-"""
+    prompt_template = """
+    Answer the question as detailed as possible from the provided context, make sure to provide all the details, if the answer is not in
+    provided context just say, "answer is not available in the context", don't provide the wrong answer\n\n
+    Context:\n {context}?\n
+    Question: \n{question}\n
 
-    try:
-        # Tạo trả lời từ Gemini
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        st.error(f"Lỗi khi tạo câu trả lời: {str(e)}")
-        return f"Đã xảy ra lỗi khi tạo câu trả lời. Chi tiết lỗi: {str(e)}"
+    Answer:
+    """
 
-# Hàm chính để tải dữ liệu và thiết lập ứng dụng
+    model = ChatGoogleGenerativeAI(model="gemini-pro",
+                             temperature=0.3)
+
+    prompt = PromptTemplate(template = prompt_template, input_variables = ["context", "question"])
+    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
+
+    return chain
+
+tokenizer = RagTokenizer.from_pretrained("facebook/rag-token-base")
+retriever = RagRetriever.from_pretrained("facebook/rag-token-base")
+generator = RagSequenceForGeneration.from_pretrained("facebook/rag-token-base")
+
+def get_rag_answer(question, context):
+    #Encode question and context
+    input_dict = tokenizer(question, context, return_tensors="pt")
+    input_ids = input_dict["input_ids"]
+    attention_mask = input_dict["attention_mask"]
+
+    #Retrieve relevant documents
+    doc_scores, doc_ids = retriever(input_ids, attention_mask)
+
+    #Generate answers
+    generated = generator.generate(
+        input_ids = input_ids,
+        attention_mask = attention_mask,
+        doc_scores = doc_scores,
+        num_beams = 4,
+        max_length = 100,
+        early_stopping = True
+    )
+
+    #Decode the generated answer
+    answer = tokenizer.decode(generated[0], skip_special_tokens = True)
+    return answer
+
+def user_input(user_question):
+    embeddings = GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
+
+    new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization = True)
+    docs = new_db.similarity_search(user_question)
+    chain = get_conversational_chain()
+
+    response = chain(
+        {"input_documents": docs, "question": user_question},
+        return_only_outputs = True
+    )
+    print(response)
+    st.write("Reply: ", response["output_text"])
+
+    #Get RAG answer
+    rag_answer = get_rag_answer(user_question, response["output_text"])
+    st.write("RAG Answer: ", rag_answer)
+
 def main():
-    # Thiết lập giao diện
-    st.title("⚖️ Chatbot Tư Vấn Pháp Lý Cho Doanh Nghiệp")
-    st.markdown("""
-    <style>
-    .main {
-        background-color: #f5f7f9;
-    }
-    .stApp {
-        max-width: 1200px;
-        margin: 0 auto;
-    }
-    .chat-container {
-        background-color: white;
-        border-radius: 10px;
-        padding: 20px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
-    .message-user {
-        background-color: #dcf8c6;
-        padding: 10px 15px;
-        border-radius: 10px;
-        margin-bottom: 10px;
-        text-align: right;
-        width: fit-content;
-        max-width: 80%;
-        margin-left: auto;
-    }
-    .message-bot {
-        background-color: #f1f0f0;
-        padding: 10px 15px;
-        border-radius: 10px;
-        margin-bottom: 10px;
-        text-align: left;
-        width: fit-content;
-        max-width: 80%;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    # Thanh bên (sidebar) cho cài đặt
+    st.set_page_config("PDF Alchemist")
+    st.header("PDF Alchemist: Obtain information from your PDF..")
+
+    user_question = st.text_input("Ask a Question from the PDFs")
+
+    if user_question:
+        user_input(user_question)
+
     with st.sidebar:
-        st.header("Cài đặt")
-        
-        # Tùy chọn tạo lại index
-        recreate_index = st.checkbox("Tạo lại FAISS index", value=False)
-        
-        st.header("Thông tin")
-        st.info("""
-        Chatbot này cung cấp thông tin tư vấn pháp lý dựa trên cơ sở dữ liệu các văn bản pháp luật Việt Nam. 
-        
-        Lưu ý: Thông tin chỉ mang tính chất tham khảo. Vui lòng tham khảo ý kiến của chuyên gia pháp lý cho các quyết định quan trọng.
-        """)
-    
-    # Tải dữ liệu
-    @st.cache_data
-    def load_data():
-        try:
-            df = pd.read_csv("documents_with_content.csv", encoding="utf-8-sig")
-            return df
-        except Exception as e:
-            st.error(f"Lỗi khi tải dữ liệu: {str(e)}")
-            # Tạo DataFrame rỗng với các cột cần thiết
-            return pd.DataFrame(columns=["title", "link", "create date", "last update", "content"])
-    
-    df = load_data()
-    
-    # Khởi tạo FAISS index
-    if 'faiss_index' not in st.session_state or 'chunk_mapping' not in st.session_state or recreate_index:
-        with st.spinner("Đang khởi tạo hệ thống tìm kiếm..."):
-            index, chunk_mapping = create_or_load_faiss_index(df, force_recreate=recreate_index)
-            st.session_state['faiss_index'] = index
-            st.session_state['chunk_mapping'] = chunk_mapping
-    
-    # Khởi tạo chat history nếu chưa có
-    if 'messages' not in st.session_state:
-        st.session_state.messages = [
-            {"role": "assistant", "content": "Xin chào! Tôi là trợ lý tư vấn pháp lý cho doanh nghiệp. Bạn có câu hỏi gì về các vấn đề pháp lý cần tư vấn không?"}
-        ]
-
-    # Hiển thị tin nhắn trò chuyện
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    # Ô nhập liệu cho người dùng
-    if prompt := st.chat_input("Nhập câu hỏi pháp lý của bạn..."):
-        # Thêm câu hỏi vào lịch sử
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        # Tạo câu trả lời
-        with st.chat_message("assistant"):
-            response_placeholder = st.empty()
-            response_placeholder.markdown("⏳ Đang tìm kiếm thông tin pháp lý liên quan...")
-            
-            # Tìm kiếm các đoạn văn bản liên quan
-            relevant_chunks = search_similar_chunks(
-                prompt, 
-                st.session_state['faiss_index'], 
-                st.session_state['chunk_mapping'], 
-                df, 
-                top_k=5
-            )
-            
-            # Hiển thị các thông tin tìm được (debug)
-            if st.sidebar.checkbox("Hiển thị kết quả tìm kiếm chi tiết", value=False):
-                st.sidebar.subheader("Các đoạn văn bản liên quan:")
-                for i, chunk in enumerate(relevant_chunks):
-                    with st.sidebar.expander(f"{i+1}. {chunk['title'][:50]}..."):
-                        st.write(f"**Nguồn:** {chunk['title']}")
-                        st.write(f"**Ngày ban hành:** {chunk['date']}")
-                        st.write(f"**Link:** {chunk['link']}")
-                        st.write(f"**Nội dung:**\n{chunk['text']}")
-            
-            # Tạo câu trả lời
-            with st.spinner("Đang tạo câu trả lời..."):
-                response = generate_response(prompt, relevant_chunks, df)
-                # Cập nhật câu trả lời
-                response_placeholder.markdown(response)
-                # Thêm vào lịch sử
-                st.session_state.messages.append({"role": "assistant", "content": response})
+        st.title("Menu:")
+        pdf_docs = st.file_uploader("Upload your PDFs and Click on the Submit Button", accept_multiple_files=True)
+        if st.button("SUBMIT"):
+            with st.spinner("Processing..."):
+                raw_text = get_pdf_text(pdf_docs)
+                text_chunks = get_text_chunks(raw_text)
+                get_vector_store(text_chunks)
+                st.success("Done")
 
 if __name__ == "__main__":
     main()
