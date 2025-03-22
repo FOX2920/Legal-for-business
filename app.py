@@ -98,53 +98,43 @@ def main():
         </div>
         """, unsafe_allow_html=True)
     
-    # Container chính cho chat
-    chat_container = st.container()
-    
     # Khởi tạo lịch sử chat nếu chưa có
     if "messages" not in st.session_state:
         st.session_state.messages = []
     
-    # Hiển thị lịch sử chat
+    # Hiển thị lịch sử chat bằng st.chat_message
     for message in st.session_state.messages:
-        with chat_container:
-            if message["role"] == "user":
-                st.markdown(f"""
-                <div style='background-color: #EAEAEA; padding: 10px; border-radius: 10px; margin-bottom: 10px;'>
-                    <p><strong>Bạn:</strong> {message["content"]}</p>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                <div style='background-color: #E3F2FD; padding: 10px; border-radius: 10px; margin-bottom: 10px;'>
-                    <p><strong>Trợ lý:</strong> {message["content"]}</p>
-                </div>
-                """, unsafe_allow_html=True)
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
     
-    # Phần nhập câu hỏi
-    user_question = st.text_input("Nhập câu hỏi của bạn ở đây...", key="question_input")
+    # Sử dụng st.chat_input thay vì st.text_input
+    user_question = st.chat_input("Nhập câu hỏi của bạn ở đây...")
     
-    if st.button("Gửi"):
-        if not user_question:
-            st.warning("Vui lòng nhập câu hỏi!")
-        else:
+    if user_question:
+        try:
+            # Hiển thị tin nhắn người dùng
+            with st.chat_message("user"):
+                st.write(user_question)
+            
+            # Thêm tin nhắn người dùng vào lịch sử
+            st.session_state.messages.append({"role": "user", "content": user_question})
+            
+            # Kiểm tra xem đã xử lý tài liệu chưa
             try:
-                # Thêm tin nhắn người dùng vào lịch sử
-                st.session_state.messages.append({"role": "user", "content": user_question})
-                
-                # Kiểm tra xem đã xử lý tài liệu chưa
-                try:
+                # Hiển thị trạng thái đang nghĩ
+                with st.chat_message("assistant"):
                     with st.spinner("Đang tìm câu trả lời..."):
                         response = user_input(user_question)
-                        
-                        # Thêm câu trả lời vào lịch sử
-                        st.session_state.messages.append({"role": "assistant", "content": response})
-                        
-                        # Làm mới trang để hiển thị tin nhắn mới
-                        st.experimental_rerun()
-                except Exception:
+                        st.write(response)
+                
+                # Thêm câu trả lời vào lịch sử
+                st.session_state.messages.append({"role": "assistant", "content": response})
+                
+            except Exception:
+                with st.chat_message("assistant"):
                     st.error("Vui lòng tải lên và xử lý tài liệu PDF trước khi đặt câu hỏi!")
-            except Exception as e:
+        except Exception as e:
+            with st.chat_message("assistant"):
                 st.error(f"Đã xảy ra lỗi: {str(e)}")
 
 if __name__ == "__main__":
