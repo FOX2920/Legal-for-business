@@ -8,91 +8,129 @@ from langchain_community.vectorstores import FAISS
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
-os.getenv("GOOGLE_API_KEY")
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Configure Google Generative AI with API key
+api_key = os.getenv("GOOGLE_API_KEY")
+genai.configure(api_key=api_key)
 
 def get_pdf_text(pdf_docs):
-    text=""
+    """Extract text from uploaded PDF documents"""
+    text = ""
     for pdf in pdf_docs:
-        pdf_reader= PdfReader(pdf)
+        pdf_reader = PdfReader(pdf)
         for page in pdf_reader.pages:
-            text+= page.extract_text()
-    return  text
-
-
+            text += page.extract_text()
+    return text
 
 def get_text_chunks(text):
+    """Split text into manageable chunks for processing"""
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
     chunks = text_splitter.split_text(text)
     return chunks
 
-
 def get_vector_store(text_chunks):
-    embeddings = GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
+    """Create and save vector embeddings from text chunks"""
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
     vector_store.save_local("faiss_index")
 
-
 def get_conversational_chain():
-
+    """Create a Q&A chain with a Vietnamese-optimized prompt"""
     prompt_template = """
+    Bạn là trợ lý AI thông minh chuyên trả lời câu hỏi dựa trên thông tin từ tài liệu. 
+    Hãy trả lời bằng tiếng Việt một cách chính xác, rõ ràng và đầy đủ.
     
-    Context:\n {context}?\n
-    Question: \n{question}\n
-
-    Answer:
+    Nội dung tài liệu:
+    {context}
+    
+    Câu hỏi: 
+    {question}
+    
+    Trả lời:
     """
-
-    model = ChatGoogleGenerativeAI(model="gemini-1.5-pro",
-                             temperature=0.3)
-
-    prompt = PromptTemplate(template = prompt_template, input_variables = ["context", "question"])
+    
+    model = ChatGoogleGenerativeAI(model="gemini-1.5-pro", temperature=0.3)
+    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
     chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
-
     return chain
 
-
-
 def user_input(user_question):
-    embeddings = GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
+    """Process user question and generate response from PDF content"""
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     
-    new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-
-    docs = new_db.similarity_search(user_question)
-
-    chain = get_conversational_chain()
-
-    
-    response = chain(
-        {"input_documents":docs, "question": user_question}
-        , return_only_outputs=True)
-
-    print(response)
-    st.write("Reply: ", response["output_text"])
-
-
-
+    try:
+        new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+        docs = new_db.similarity_search(user_question)
+        
+        chain = get_conversational_chain()
+        
+        response = chain(
+            {"input_documents": docs, "question": user_question},
+            return_only_outputs=True
+        )
+        
+        st.write("Trả lời:", response["output_text"])
+    except Exception as e:
+        st.error(f"Đã xảy ra lỗi: {str(e)}")
+        st.info("Vui lòng tải lên tài liệu PDF và nhấn 'Xử lý tài liệu' trước khi đặt câu hỏi.")
 
 def main():
-    st.set_page_config("Chat PDF")
-    st.header("Chat with PDF using Gemini💁")
-
-    user_question = st.text_input("Ask a Question from the PDF Files")
-
+    """Main application function"""
+    st.set_page_config(page_title="Chat PDF Tiếng Việt", layout="wide")
+    
+    st.title("🇻🇳 Trò chuyện với tài liệu PDF bằng Gemini AI")
+    st.markdown("---")
+    
+    with st.sidebar:
+        st.header("📁 Quản lý tài liệu")
+        pdf_docs = st.file_uploader(
+            "Tải lên tài liệu PDF của bạn", 
+            accept_multiple_files=True,
+            type=["pdf"]
+        )
+        
+        process_button = st.button("Xử lý tài liệu")
+        
+        if process_button and pdf_docs:
+            with st.spinner("Đang xử lý tài liệu..."):
+                # Get PDF text
+                raw_text = get_pdf_text(pdf_docs)
+                
+                # Get text chunks
+                text_chunks = get_text_chunks(raw_text)
+                
+                # Create vector store
+                get_vector_store(text_chunks)
+                
+                st.success("Xử lý tài liệu hoàn tất! Bạn có thể đặt câu hỏi ngay bây giờ.")
+        
+        st.markdown("---")
+        st.markdown("### Hướng dẫn sử dụng:")
+        st.info(
+            "1. Tải lên tài liệu PDF\n"
+            "2. Nhấn 'Xử lý tài liệu'\n"
+            "3. Đặt câu hỏi về nội dung tài liệu"
+        )
+    
+    # Chat interface
+    st.header("💬 Đặt câu hỏi về tài liệu của bạn")
+    user_question = st.text_input("Nhập câu hỏi của bạn về tài liệu PDF:")
+    
     if user_question:
         user_input(user_question)
-
-    with st.sidebar:
-        st.title("Menu:")
-        pdf_docs = st.file_uploader("Upload your PDF Files and Click on the Submit & Process Button", accept_multiple_files=True)
-        if st.button("Submit & Process"):
-            with st.spinner("Processing..."):
-                raw_text = get_pdf_text(pdf_docs)
-                text_chunks = get_text_chunks(raw_text)
-                get_vector_store(text_chunks)
-                st.success("Done")
-
-
+    
+    # Display sample questions
+    with st.expander("Các câu hỏi mẫu"):
+        st.markdown("""
+        - Nội dung chính của tài liệu là gì?
+        - Tóm tắt thông tin quan trọng nhất trong tài liệu.
+        - Giải thích khái niệm X được đề cập trong tài liệu.
+        - Các điểm chính trong phần Y của tài liệu là gì?
+        """)
 
 if __name__ == "__main__":
     main()
