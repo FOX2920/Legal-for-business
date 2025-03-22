@@ -1,81 +1,103 @@
 import streamlit as st
+from PyPDF2 import PdfReader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
-from utils.save_docs import save_docs_to_vectordb
-from utils.session_state import initialize_session_state_variables
-from utils.prepare_vectordb import get_vectorstore
-from utils.chatbot import chat
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+import google.generativeai as genai
+from langchain_community.vectorstores import FAISS
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.chains.question_answering import load_qa_chain
+from langchain.prompts import PromptTemplate
 
-class ChatApp:
+
+from dotenv import load_dotenv
+
+load_dotenv()
+os.getenv("GOOGLE_API_KEY")
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+def get_pdf_text(pdf_docs):
+    text=""
+    for pdf in pdf_docs:
+        pdf_reader= PdfReader(pdf)
+        for page in pdf_reader.pages:
+            text+= page.extract_text()
+    return  text
+
+
+
+def get_text_chunks(text):
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
+    chunks = text_splitter.split_text(text)
+    return chunks
+
+
+def get_vector_store(text_chunks):
+    embeddings = GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
+    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+    vector_store.save_local("faiss_index")
+
+
+def get_conversational_chain():
+
+    prompt_template = """
+    
+    Context:\n {context}?\n
+    Question: \n{question}\n
+
+    Answer:
     """
-    Một ứng dụng Streamlit để trò chuyện với tài liệu PDF
 
-    Lớp này đóng gói chức năng để tải lên tài liệu PDF, xử lý chúng,
-    và cho phép người dùng trò chuyện với tài liệu bằng chatbot. Nó xử lý việc khởi tạo
-    cấu hình Streamlit và các biến trạng thái phiên, cũng như giao diện người dùng cho việc tải lên tài liệu
-    và tương tác trò chuyện
-    """
-    def __init__(self):
-        """
-        Khởi tạo lớp ChatApp
+    model = ChatGoogleGenerativeAI(model="gemini-pro",
+                             temperature=0.3)
 
-        Phương thức này đảm bảo sự tồn tại của thư mục 'docs', thiết lập cấu hình trang Streamlit,
-        và khởi tạo các biến trạng thái phiên
-        """
-        # Đảm bảo thư mục docs tồn tại
-        if not os.path.exists("docs"):
-            os.makedirs("docs")
+    prompt = PromptTemplate(template = prompt_template, input_variables = ["context", "question"])
+    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
 
-        # Cấu hình và khởi tạo trạng thái phiên
-        st.set_page_config(page_title="Trò chuyện với PDF 📚", page_icon="📚")
-        st.title("Trò chuyện với tài liệu PDF 📚")
-        initialize_session_state_variables(st)
-        self.docs_files = st.session_state.processed_documents
+    return chain
 
-    def run(self):
-        """
-        Chạy ứng dụng Streamlit để trò chuyện với PDF
 
-        Phương thức này xử lý giao diện người dùng để tải lên tài liệu, mở khóa trò chuyện khi tài liệu được tải lên,
-        và khóa trò chuyện cho đến khi tài liệu được tải lên
-        """
-        upload_docs = os.listdir("docs")
-        # Giao diện thanh bên cho việc tải lên tài liệu
-        with st.sidebar:
-            st.subheader("Tài liệu của bạn")
-            if upload_docs:
-                st.write("Tài liệu đã tải lên:")
-                for doc in upload_docs:
-                    st.text(f"📄 {doc}")
-            else:
-                st.info("Chưa có tài liệu nào được tải lên.")
-            
-            st.subheader("Tải lên tài liệu PDF")
-            pdf_docs = st.file_uploader("Chọn tài liệu PDF và nhấn vào 'Xử lý tài liệu'", type=['pdf'], accept_multiple_files=True)
-            if pdf_docs:
-                save_docs_to_vectordb(pdf_docs, upload_docs)
 
-        # Mở khóa trò chuyện khi tài liệu được tải lên
-        if self.docs_files or st.session_state.uploaded_pdfs:
-            # Kiểm tra xem có tài liệu mới được tải lên để cập nhật biến vectordb trong trạng thái phiên không
-            if len(upload_docs) > st.session_state.previous_upload_docs_length:
-                with st.spinner("Đang cập nhật cơ sở dữ liệu..."):
-                    st.session_state.vectordb = get_vectorstore(upload_docs, from_session_state=True)
-                    st.session_state.previous_upload_docs_length = len(upload_docs)
-                    st.success("Cơ sở dữ liệu đã được cập nhật!")
-            
-            st.session_state.chat_history = chat(st.session_state.chat_history, st.session_state.vectordb)
+def user_input(user_question):
+    embeddings = GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
+    
+    new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
 
-        # Khóa trò chuyện cho đến khi tài liệu được tải lên
-        if not self.docs_files and not st.session_state.uploaded_pdfs:
-            st.info("Hãy tải lên tệp PDF để bắt đầu trò chuyện. Bạn có thể tiếp tục tải lên nhiều tệp để trò chuyện, và nếu bạn cần thoát, bạn sẽ không cần tải lại các tệp này khi quay lại.")
-            st.markdown("""
-            ### Hướng dẫn sử dụng:
-            1. Tải lên một hoặc nhiều tệp PDF từ thanh bên trái
-            2. Nhấn nút "Xử lý tài liệu" để phân tích tài liệu
-            3. Đặt câu hỏi về nội dung của tài liệu trong khung chat
-            4. Xem nguồn thông tin được sử dụng trong thanh bên trái
-            """)
+    docs = new_db.similarity_search(user_question)
+
+    chain = get_conversational_chain()
+
+    
+    response = chain(
+        {"input_documents":docs, "question": user_question}
+        , return_only_outputs=True)
+
+    print(response)
+    st.write("Reply: ", response["output_text"])
+
+
+
+
+def main():
+    st.set_page_config("Chat PDF")
+    st.header("Chat with PDF using Gemini💁")
+
+    user_question = st.text_input("Ask a Question from the PDF Files")
+
+    if user_question:
+        user_input(user_question)
+
+    with st.sidebar:
+        st.title("Menu:")
+        pdf_docs = st.file_uploader("Upload your PDF Files and Click on the Submit & Process Button", accept_multiple_files=True)
+        if st.button("Submit & Process"):
+            with st.spinner("Processing..."):
+                raw_text = get_pdf_text(pdf_docs)
+                text_chunks = get_text_chunks(raw_text)
+                get_vector_store(text_chunks)
+                st.success("Done")
+
+
 
 if __name__ == "__main__":
-    app = ChatApp()
-    app.run()
+    main()
