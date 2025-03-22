@@ -1,8 +1,8 @@
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_community.vectorstores import Chroma
-from dotenv import load_dotenv
+from langchain_community.vectorstores import FAISS  # Thay Chroma bằng FAISS
+import streamlit as st
 import os
 
 def extract_pdf_text(pdfs):
@@ -48,16 +48,17 @@ def get_vectorstore(pdfs, from_session_state=False):
     Trả về:
     - vectordb hoặc None: Kho vector được tạo hoặc lấy ra. Trả về None nếu tải từ trạng thái phiên và cơ sở dữ liệu không tồn tại
     """
-    load_dotenv()
-    embedding = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    if from_session_state and os.path.exists("Vector_DB - Documents"):
-        # Lấy kho vector từ cơ sở dữ liệu hiện có
-        vectordb = Chroma(persist_directory="Vector_DB - Documents", embedding_function=embedding)
+    embedding = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=st.secrets["GOOGLE_API_KEY"])
+    
+    if from_session_state and os.path.exists("faiss_index"):
+        # Tải kho vector từ đĩa
+        vectordb = FAISS.load_local("faiss_index", embedding)
         return vectordb
     elif not from_session_state:
         docs = extract_pdf_text(pdfs)
         chunks = get_text_chunks(docs)
-        # Tạo kho vector từ các đoạn và lưu nó vào thư mục Vector_DB - Documents
-        vectordb = Chroma.from_documents(documents=chunks, embedding=embedding, persist_directory="Vector_DB - Documents")
+        # Tạo kho vector từ các đoạn và lưu nó vào đĩa
+        vectordb = FAISS.from_documents(documents=chunks, embedding=embedding)
+        vectordb.save_local("faiss_index")
         return vectordb
     return None
