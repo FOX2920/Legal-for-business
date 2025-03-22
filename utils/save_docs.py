@@ -4,24 +4,24 @@ from utils.prepare_vectordb import get_vectorstore
 
 def save_docs_to_vectordb(pdf_docs, upload_docs):
     """
-    Save uploaded PDF documents to the 'docs' folder and create or update the vectorstore
+    Lưu tài liệu PDF đã tải lên vào thư mục 'docs' và tạo hoặc cập nhật kho vector
 
-    Parameters:
-    - pdf_docs (list): List of uploaded PDF documents
-    - upload_docs (list): List of names of previously uploaded documents
+    Tham số:
+    - pdf_docs (list): Danh sách tài liệu PDF đã tải lên
+    - upload_docs (list): Danh sách tên của các tài liệu đã tải lên trước đó
     """
-    # Filter is the file is a new one or not. If it is, the button to process will appear
+    # Lọc xem tệp có phải là tệp mới hay không. Nếu là tệp mới, nút xử lý sẽ xuất hiện
     new_files = [pdf for pdf in pdf_docs if pdf.name not in upload_docs]
     new_files_names = [pdf.name for pdf in new_files]
-    if new_files and st.button("Process"):
-        # Iterate only trough the new files and save them to the docs folder
+    if new_files and st.button("Xử lý tài liệu"):
+        # Lặp qua các tệp mới và lưu chúng vào thư mục docs
         for pdf in new_files:
             pdf_path = os.path.join("docs", pdf.name)
             with open(pdf_path, "wb") as f:
                 f.write(pdf.getvalue())
             st.session_state.uploaded_pdfs.extend(pdf_docs)
-        # Display the processing message
-        with st.spinner("Processing"):
-            # Create or update the vectorstore with the newly uploaded documents
+        # Hiển thị thông báo đang xử lý
+        with st.spinner("Đang xử lý..."):
+            # Tạo hoặc cập nhật kho vector với các tài liệu mới tải lên
             get_vectorstore(new_files_names)
-            st.success(f"{pdf.name} uploaded successfully to 'docs' folder.")
+            st.success(f"Đã tải lên thành công {len(new_files)} tệp vào thư mục 'docs'.")
