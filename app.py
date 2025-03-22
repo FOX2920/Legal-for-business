@@ -55,101 +55,94 @@ def get_conversational_chain():
     return chain
 
 # Hàm xử lý đầu vào của người dùng
-def user_input(user_question):
+def process_user_input(user_question):
     try:
         embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
         new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
         docs = new_db.similarity_search(user_question)
         
         chain = get_conversational_chain()
-        response = chain(
-            {"input_documents": docs, "question": user_question},
-            return_only_outputs=True
-        )
         
-        return response["output_text"]
+        # Tạo generator để mô phỏng streaming
+        def response_generator():
+            response = chain(
+                {"input_documents": docs, "question": user_question},
+                return_only_outputs=True
+            )
+            return response["output_text"]
+        
+        return response_generator()
     except Exception as e:
         return f"Xin lỗi, đã xảy ra lỗi: {str(e)}"
 
 def main():
-    st.set_page_config(page_title="Trợ lý tài liệu PDF", page_icon="📚")
+    st.set_page_config(page_title="Trợ lý PDF Chat", page_icon="📚")
     
-    # Tạo tiêu đề và hiệu ứng
-    st.markdown("""
-    <h1 style='text-align: center; color: #1E88E5;'>Trợ lý Tài Liệu PDF 📚</h1>
-    <p style='text-align: center; font-size: 18px;'>Tải lên tài liệu PDF và đặt câu hỏi bằng tiếng Việt</p>
-    """, unsafe_allow_html=True)
-    
-    # Tạo sidebar
+    # Tạo layout với sidebar và khu vực chat chính
     with st.sidebar:
-        st.markdown("<h2 style='text-align: center;'>Tải lên tài liệu</h2>", unsafe_allow_html=True)
-        pdf_docs = st.file_uploader("Tải lên tài liệu PDF của bạn", accept_multiple_files=True, type=["pdf"])
+        st.title("Trợ lý PDF Chat 📚")
+        st.markdown("---")
+        
+        # Tải lên tài liệu
+        pdf_docs = st.file_uploader("Tải lên tài liệu PDF", accept_multiple_files=True, type=["pdf"])
         
         if st.button("Xử lý tài liệu"):
             if not pdf_docs:
                 st.error("Vui lòng tải lên ít nhất một tài liệu PDF!")
             else:
                 with st.spinner("Đang xử lý tài liệu..."):
+                    # Xử lý tài liệu
                     raw_text = get_pdf_text(pdf_docs)
                     text_chunks = get_text_chunks(raw_text)
                     get_vector_store(text_chunks)
+                    st.session_state.pdf_processed = True
                     st.success("Hoàn thành! Bạn có thể đặt câu hỏi ngay bây giờ.")
         
         st.markdown("---")
-        st.markdown("""
-        <div style='text-align: center;'>
-            <p>Trợ lý sử dụng mô hình Gemini 1.5 Pro</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.caption("Được hỗ trợ bởi Gemini 1.5 Pro")
     
-    # Container chính cho chat
-    chat_container = st.container()
+    # Khu vực chat chính
+    st.title("Chat với Tài liệu PDF")
     
-    # Khởi tạo lịch sử chat nếu chưa có
+    # Khởi tạo lịch sử chat trong session state nếu chưa có
     if "messages" not in st.session_state:
         st.session_state.messages = []
     
-    # Hiển thị lịch sử chat
+    if "pdf_processed" not in st.session_state:
+        st.session_state.pdf_processed = False
+    
+    # Hiển thị tất cả tin nhắn từ lịch sử
     for message in st.session_state.messages:
-        with chat_container:
-            if message["role"] == "user":
-                st.markdown(f"""
-                <div style='background-color: #EAEAEA; padding: 10px; border-radius: 10px; margin-bottom: 10px;'>
-                    <p><strong>Bạn:</strong> {message["content"]}</p>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                <div style='background-color: #E3F2FD; padding: 10px; border-radius: 10px; margin-bottom: 10px;'>
-                    <p><strong>Trợ lý:</strong> {message["content"]}</p>
-                </div>
-                """, unsafe_allow_html=True)
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
     
-    # Phần nhập câu hỏi
-    user_question = st.text_input("Nhập câu hỏi của bạn ở đây...", key="question_input")
-    
-    if st.button("Gửi"):
-        if not user_question:
-            st.warning("Vui lòng nhập câu hỏi!")
-        else:
+    # Xử lý đầu vào từ người dùng
+    if prompt := st.chat_input("Nhập câu hỏi của bạn..."):
+        if not st.session_state.pdf_processed:
+            st.error("Vui lòng tải lên và xử lý tài liệu PDF trước khi đặt câu hỏi!")
+            return
+        
+        # Hiển thị tin nhắn của người dùng
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        
+        # Thêm tin nhắn của người dùng vào lịch sử
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        
+        # Xử lý câu hỏi và hiển thị câu trả lời
+        with st.chat_message("assistant"):
             try:
-                # Thêm tin nhắn người dùng vào lịch sử
-                st.session_state.messages.append({"role": "user", "content": user_question})
-                
-                # Kiểm tra xem đã xử lý tài liệu chưa
-                try:
-                    with st.spinner("Đang tìm câu trả lời..."):
-                        response = user_input(user_question)
-                        
-                        # Thêm câu trả lời vào lịch sử
-                        st.session_state.messages.append({"role": "assistant", "content": response})
-                        
-                        # Làm mới trang để hiển thị tin nhắn mới
-                        st.experimental_rerun()
-                except Exception:
-                    st.error("Vui lòng tải lên và xử lý tài liệu PDF trước khi đặt câu hỏi!")
+                with st.spinner("Đang tìm câu trả lời..."):
+                    response = process_user_input(prompt)
+                    st.markdown(response)
+                    
+                    # Thêm câu trả lời vào lịch sử
+                    st.session_state.messages.append({"role": "assistant", "content": response})
             except Exception as e:
-                st.error(f"Đã xảy ra lỗi: {str(e)}")
+                error_message = f"Đã xảy ra lỗi: {str(e)}"
+                st.error(error_message)
+                # Thêm thông báo lỗi vào lịch sử
+                st.session_state.messages.append({"role": "assistant", "content": error_message})
 
 if __name__ == "__main__":
     main()
